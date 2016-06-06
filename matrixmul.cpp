@@ -9,123 +9,15 @@
 #include <iostream>
 #include <iomanip>
 
+#include "matrixmul.h"
 #include "densematgen.h"
 
 using namespace std;
 
-#define MPI_INIT_TAG 	1001
-#define MPI_INIT_A_TAG 	1002
-#define MPI_SEND_A 		1003
-
-#define DEBUG_RANK 3
-
-struct InitMessage {
-	int cx, cy, c;
-	int n, nnz, max_nnz;
-	int num_rounds; // q
-	int firstBColumn; //included
-	int lastBColumn; //excluded
-	int firstARow;
-	int lastARow;
-	int firstAColumn;
-	int lastAColumn;
-};
-
-struct Point {
-	int idx; //wartość
-	double x; //współrzędne kolumny
-
-	Point(int idx, double x): idx(idx), x(x) {}
-	Point() {}
-};
-
-struct PartA {
-	vector<vector<Point>> rows;
-	int firstRow; //included
-	int lastRow; //excluded
-
-	PartA(int firstRow, int lastRow): firstRow(firstRow), lastRow(lastRow) {}
-	PartA() {}
-};
-
-struct PartB {
-	int firstColumn, lastColumn;
-	vector<vector<double>> columns;
-
-	PartB(int firstColumn, int lastColumn): firstColumn(firstColumn), lastColumn(lastColumn) {}
-	PartB() {}
-};
-
-struct PartC {
-	int firstColumn, lastColumn, n;
-	vector<list<Point>> columns;
-
-	PartC(int firstColumn, int lastColumn, int n): firstColumn(firstColumn), lastColumn(lastColumn), n(n) {}
-	PartC() {}
-};
-
-ostream& operator<<(ostream &os, const Point &p) {
-	os << "(" << p.idx << ", " << p.x << ")";
-	return os;
-}
-
-ostream& operator<<(ostream& os, const PartA &a) {
-	os << "==== PartA ====\n";
-	os << a.firstRow << " " << a.lastRow << endl;
-	for(int i = a.firstRow; i < a.lastRow; i++) {
-		int idx = i - a.firstRow;
-		for(auto p = a.rows[idx].begin(); p != a.rows[idx].end(); p++) {
-			os << *p << " ";
-		}
-		os << "\n";
-	}
-	return os;
-}
-
-ostream& operator<<(ostream& os, const PartB &b) {
-	os << "==== PartB ====\n";
-	os << b.firstColumn << " " << b.lastColumn << "\n";
-	for(int j = 0; j < b.columns[0].size(); j++) {
-		for(int i = 0, col = b.firstColumn; col < b.lastColumn; col++, i++) {
-			os << b.columns[i][j] << " ";
-		}
-		os << "\n";
-	}
-
-	return os;
-}
-
-ostream& operator<<(ostream& os, const PartC &c) {
-	os << "==== PartC ====\n";
-	os << c.firstColumn << " " << c.lastColumn << "\n";
-	bool bol = true;
-	vector< decltype(c.columns[0].begin()) > ptr;
-	for(int i = 0, col = c.firstColumn; col < c.lastColumn; col++, i++)
-		ptr.push_back(c.columns[i].begin());
-	for(int j = 0; j < c.n; j++) {
-		for(int i = 0, col = c.firstColumn; col < c.lastColumn; col++, i++) {
-			if(ptr[i]->idx == j) {
-				os << ptr[i]->x << " ";
-				ptr[i]++;
-			}
-			else os << 0 << " ";
-		}
-		os << "\n";
-	}
-
-	return os;
-}
-
-int prev_proc(int x, int y);
-int next_proc(int x, int y);
-
-int analysePartA(const PartA &partA);
-int partAToMessage(const PartA &partA, char *out);
-PartA messageToPartA(char *out);
-
 int main(int argc, char * argv[])
 {
 	cout << setprecision(5) << fixed;
+	cerr << setprecision(5) << fixed;
 
 	int show_results = 0;
 	int use_inner = 0;
@@ -180,6 +72,8 @@ int main(int argc, char * argv[])
 		return 3;
 	}
 
+	comm_start =  MPI_Wtime();
+
 	int c = repl_fact;
 	int p = num_processes;
 	int s = p / c;
@@ -190,21 +84,20 @@ int main(int argc, char * argv[])
 	MPI_Status statuses[num_processes * 2];
 
 	InitMessage my_init_msg;
-	PartA my_partA;
-	PartB my_partB;
-	PartC my_partC;
+	PartA A;
+	PartB B;
+	PartC C;
 	InitMessage init_msgs[s][c];
 	//read
 	if(mpi_rank == 0) {
 		int m, n, nnz, max_nnz;
 		FILE *file = fopen(sparse_filename, "r");
 		fscanf(file, "%d%d%d%d", &m, &n, &nnz, &max_nnz);
-		printf("%d %d %d %d\n", m, n, nnz, max_nnz);
 	
 		vector<double> line1(nnz);
 		vector<int> line2(m + 1);
 		vector<int> line3(nnz);
-		vector<vector<Point>> A(m);
+		vector<vector<Point>> inputA(m);
 
 		for(int i = 0; i < nnz; i++) fscanf(file, "%lf", &line1[i]);
 		for(int i = 0; i < m + 1; i++) fscanf(file, "%d", &line2[i]);
@@ -212,12 +105,10 @@ int main(int argc, char * argv[])
 
 		for(int idx = 0, i = 0; i < m; i++) {
 			for(; idx < line2[i + 1]; idx++) {
-				A[i].push_back(Point(line3[idx], line1[idx]));
+				inputA[i].push_back(Point(line3[idx], line1[idx]));
 			}
 		}
 		
-		// set B columns
-		int length;
 		// set A columns and rows
 		if(use_inner) {
 			int length = (n + s - 1) / s;
@@ -227,30 +118,28 @@ int main(int argc, char * argv[])
 			ids[0] = 0;
 			for(int i = 1; i < c; i++) {
 				ids[i] = (ids[i - 1] - q + s) % s;
-				printf("%d ", ids[i]);
 			}
-			printf("\n");
 
 			for(int i = 0, row = 0; i < s; i++, row = min(row + length, n)) {
 				for(int j = 0; j < c; j++) {
-					init_msgs[(ids[j] + i) % s][j].firstARow = row;
-					init_msgs[(ids[j] + i) % s][j].lastARow = min(row + length, n);
+					int idx = (ids[j] + i) % s;
+					int idy = j;
 
-					init_msgs[(ids[j] + i) % s][j].firstBColumn = length * ((ids[j] + i) % s);
-					init_msgs[(ids[j] + i) % s][j].lastBColumn = min(length * ((ids[j] + i) % s) + length, n);
+					init_msgs[idx][idy].firstBColumn = length * idx;
+					init_msgs[idx][idy].lastBColumn = min(length * (idx + 1), n);
 
-					init_msgs[(ids[j] + i) % s][j].cx = (ids[j] + i) % s;
-					init_msgs[(ids[j] + i) % s][j].cy = j;
+					init_msgs[idx][idy].cx = idx;
+					init_msgs[idx][idy].cy = idy;
 
-					init_msgs[(ids[j] + i) % s][j].n = m;
-					init_msgs[(ids[j] + i) % s][j].nnz = nnz;
-					init_msgs[(ids[j] + i) % s][j].max_nnz = max_nnz;
+					init_msgs[idx][idy].n = m;
+					init_msgs[idx][idy].nnz = nnz;
+					init_msgs[idx][idy].max_nnz = max_nnz;
 				}
 				partA[i].firstRow = row;
 				partA[i].lastRow = min(row + length, n);
 				partA[i].rows.resize(partA[i].lastRow - partA[i].firstRow);
 				for(int row_idx = row; row_idx < partA[i].lastRow; row_idx++) {
-					partA[i].rows[row_idx - row] = A[row_idx];
+					partA[i].rows[row_idx - row] = inputA[row_idx];
 				}
 			}
 			/*
@@ -264,7 +153,6 @@ int main(int argc, char * argv[])
 			free(msg);
 			// DEBUG END
 			*/
-			my_init_msg = init_msgs[0][0];
 
 			for(int i = 1; i < p; i++) {
 				int idx = (i/c) % s;
@@ -294,18 +182,7 @@ int main(int argc, char * argv[])
 				);
 			}
 			my_init_msg = init_msgs[0][0];
-			my_partA = partA[0];
-		}
-		else {
-			vector<InitMessage> init_msgs(num_processes);
-			length = (n + num_processes - 1) / num_processes;
-			for(int p = 0, column = 0; 
-			 	p < num_processes && column < n; 
-			  	p++, column += length) 
-			{
-				init_msgs[p].firstBColumn = column;
-				init_msgs[p].lastBColumn = min(column + length, n);
-			}
+			A = partA[0];
 		}
 	}
 	
@@ -344,10 +221,11 @@ int main(int argc, char * argv[])
 		);
 
 		MPI_Wait(&recv_request, &recv_status);
-		my_partA = messageToPartA(recv_msg);
+		A = messageToPartA(recv_msg);
 		if(mpi_rank == DEBUG_RANK) {
-		cout << "I'm " << mpi_rank << "(" << my_init_msg.cx << ", " << my_init_msg.cy  << "), and got:\n";
-		cout << my_partA; }
+			cout << "I'm " << mpi_rank << "(" << my_init_msg.cx << ", " << my_init_msg.cy  << "), and got:\n";
+			cout << A; 
+		}
 	}
 	if(mpi_rank == 0) {
 		MPI_Waitall((num_processes - 1) * 2, requests + 2, statuses + 2);
@@ -355,30 +233,23 @@ int main(int argc, char * argv[])
 		//for(int i = 1; i < num_processes; i ++) cout << messageToPartA(messages[i]);
 	}
 
-	// DEBUG BEGIN
-	//printf("I'm %d and my coords are: %d, %d. Rows: %d, %d. Colums: %d, %d.\n", mpi_rank, my_init_msg.cx, my_init_msg.cy,
-	//	my_init_msg.firstARow, my_init_msg.lastARow, my_init_msg.firstBColumn, my_init_msg.lastBColumn);
-	// DEBUG END
-
 	// GENERATE MATRIX B
 	int n = my_init_msg.n;
-	my_partB = PartB(my_init_msg.firstBColumn, my_init_msg.lastBColumn);
-	my_partB.columns.resize(my_init_msg.lastBColumn - my_init_msg.firstBColumn, vector<double>(n));
+	B = PartB(my_init_msg.firstBColumn, my_init_msg.lastBColumn);
+	B.columns.resize(my_init_msg.lastBColumn - my_init_msg.firstBColumn, vector<double>(n));
 	for(int i = 0, col = my_init_msg.firstBColumn; col < my_init_msg.lastBColumn; col++, i++) {
 		for(int j = 0; j < n; j++)
-			my_partB.columns[i][j] = generate_double(gen_seed, j, col);
+			B.columns[i][j] = generate_double(gen_seed, j, col);
 	}
 
 	// DEBUG BEGIN
-	if(mpi_rank == DEBUG_RANK) cout << my_partB;
+	if(mpi_rank == DEBUG_RANK) cout << B;
 	// DEBUG END
 
 	// CREATE MATRIX C
-	my_partC = PartC(my_partB.firstColumn, my_partB.lastColumn, n);
-	my_partC.columns.resize(my_partC.lastColumn - my_partC.firstColumn);
+	C = PartC(B.firstColumn, B.lastColumn, n);
+	C.columns.resize(C.lastColumn - C.firstColumn);
 
-	comm_start =  MPI_Wtime();
-	// FIXME: scatter sparse matrix; cache sparse matrix; cache dense matrix
 	MPI_Barrier(MPI_COMM_WORLD);
 	comm_end = MPI_Wtime();
 
@@ -394,7 +265,7 @@ int main(int argc, char * argv[])
 		int idy = my_init_msg.cy;
 
 		// TODO - don't send and receive last message
-		int bytes = partAToMessage(my_partA, send_msg);
+		int bytes = partAToMessage(A, send_msg);
 		MPI_Isend(
 			send_msg,
 			bytes,
@@ -406,19 +277,18 @@ int main(int argc, char * argv[])
 		);
 
 		if(mpi_rank == DEBUG_RANK)
-			cout << my_partA;
+			cout << A;
 
-		if(mpi_rank == DEBUG_RANK) {
-		for(int i = 0, row = my_partA.firstRow; row < my_partA.lastRow; row++, i++) {
-			for(int j = 0, col = my_partB.firstColumn; col < my_partB.lastColumn; col++, j++) {
+		for(int i = 0, row = A.firstRow; row < A.lastRow; row++, i++) {
+			for(int j = 0, col = B.firstColumn; col < B.lastColumn; col++, j++) {
 				double el = 0;
-				for(auto it = my_partA.rows[i].begin(); it != my_partA.rows[i].end(); it++) {
-					el += it->x * my_partB.columns[j][it->idx];
-					//cout << row << " " << col << " " << it->idx << " " << it->x << " " << my_partB.columns[j][it->idx] << " " << el <<  "\n";
+				for(auto it = A.rows[i].begin(); it != A.rows[i].end(); it++) {
+					el += it->x * B.columns[j][it->idx];
+					//cout << row << " " << col << " " << it->idx << " " << it->x << " " << B.columns[j][it->idx] << " " << el <<  "\n";
 				}
-				my_partC.columns[j].push_back(Point(row, el));
+				C.columns[j].push_back(Point(row, el));
 			}
-		}}
+		}
 
 		MPI_Irecv(
 			recv_msg,
@@ -433,11 +303,11 @@ int main(int argc, char * argv[])
 		MPI_Wait(&send_request, &send_status);
 		MPI_Wait(&recv_request, &recv_status);
 
-		my_partA = messageToPartA(recv_msg);
+		A = messageToPartA(recv_msg);
 	}
 
 	// Sort partC
-	for(auto &col : my_partC.columns) {
+	for(auto &col : C.columns) {
 		if(col.size() == 1) continue;
 		auto ptr = col.begin();
 		for(; next(ptr) != col.end(); ptr++)
@@ -453,14 +323,66 @@ exit:
 	MPI_Barrier(MPI_COMM_WORLD);
 	comp_end = MPI_Wtime();
 
+	free(recv_msg);
+	free(send_msg);
+
 	// DEBUG BEGIN
-	if(mpi_rank == DEBUG_RANK) cout << my_partC;
+	if(mpi_rank == DEBUG_RANK) cout << C;
 	// DEBUG END
 	
 	if (show_results) 
 	{
-		// FIXME: replace the following line: print the whole result matrix
-		printf("1 1\n42\n");
+		double bigC[n][n];
+		memset(bigC, 0, n * n * sizeof(double));
+		int bytes = rows_per_proc * n * sizeof(Point) + (2 + rows_per_proc) * sizeof(int);
+		char *sendbuf = NULL, *recvbuf = NULL, *buf = NULL;
+		int sendcount = 0;
+		int *recvcount = NULL, *displs = NULL;
+
+		if(mpi_rank == 0) {
+			recvbuf = (char*)malloc(bytes * p);
+			recvcount = (int*)malloc(sizeof(int) * p);
+			displs = (int*)malloc(sizeof(int) * p);
+			for(int i = 0; i < p; i++) {
+				recvcount[i] = bytes;
+				displs[i] = i * bytes;
+			}
+
+			partCToMessage(C, recvbuf);
+		}
+		else {
+			sendbuf = (char*)malloc(bytes);
+			sendcount = partCToMessage(C, sendbuf);
+		}
+
+		MPI_Gatherv(sendbuf, sendcount, MPI_BYTE, recvbuf, recvcount,
+			displs, MPI_BYTE, 0, MPI_COMM_WORLD);
+
+		if(mpi_rank == 0) {
+			for(int i = 0; i < min(p, s * c); i++) {
+				buf = recvbuf + i * bytes;
+				PartA tempA = messageToPartA(buf);
+
+				for(int i = 0, row = tempA.firstRow; row < tempA.lastRow; row++, i++) {
+					for(auto &p : tempA.rows[i]) {
+						bigC[p.idx][row] = p.x;
+					}
+				}
+			}
+
+			cerr << n << " " << n << "\n";
+			for(int i = 0; i < n; i++) {
+				for(int j = 0; j < n; j++)
+					cerr << bigC[i][j] << " ";
+				cerr << "\n";
+			}
+		}
+
+		if(mpi_rank == 0) {
+			free(recvbuf);
+			free(recvcount);
+			free(displs);
+		}
 	}
 	if (count_ge)
 	{
@@ -468,8 +390,6 @@ exit:
 		printf("54\n");
 	}
 
-	free(recv_msg);
-	free(send_msg);
 	MPI_Finalize();
 	return 0;
 }
@@ -510,6 +430,15 @@ int partAToMessage(const PartA &partA, char *out) {
 	return size;
 }
 
+int partCToMessage(const PartC &c, char *out) {
+	PartA a(c.firstColumn, c.lastColumn);
+	a.rows = vector<vector<Point>>(c.columns.size());
+	for(int i = 0; i < c.columns.size(); i++)
+		a.rows[i] = vector<Point> { c.columns[i].begin(), c.columns[i].end() };
+
+	return partAToMessage(a, out);
+}
+
 PartA messageToPartA(char *out) {
 	PartA partA;
 	partA.firstRow = *(int*)out; out += sizeof(int);
@@ -528,4 +457,56 @@ PartA messageToPartA(char *out) {
 	}
 
 	return partA;
+}
+
+ostream& operator<<(ostream &os, const Point &p) {
+	os << "(" << p.idx << ", " << p.x << ")";
+	return os;
+}
+
+ostream& operator<<(ostream& os, const PartA &a) {
+	os << "==== PartA ====\n";
+	os << a.firstRow << " " << a.lastRow << endl;
+	for(int i = a.firstRow; i < a.lastRow; i++) {
+		int idx = i - a.firstRow;
+		for(auto p = a.rows[idx].begin(); p != a.rows[idx].end(); p++) {
+			os << *p << " ";
+		}
+		os << "\n";
+	}
+	return os;
+}
+
+ostream& operator<<(ostream& os, const PartB &b) {
+	os << "==== PartB ====\n";
+	os << b.firstColumn << " " << b.lastColumn << "\n";
+	for(int j = 0; j < b.columns[0].size(); j++) {
+		for(int i = 0, col = b.firstColumn; col < b.lastColumn; col++, i++) {
+			os << b.columns[i][j] << " ";
+		}
+		os << "\n";
+	}
+
+	return os;
+}
+
+ostream& operator<<(ostream& os, const PartC &c) {
+	os << "==== PartC ====\n";
+	os << c.firstColumn << " " << c.lastColumn << "\n";
+	bool bol = true;
+	vector< decltype(c.columns[0].begin()) > ptr;
+	for(int i = 0, col = c.firstColumn; col < c.lastColumn; col++, i++)
+		ptr.push_back(c.columns[i].begin());
+	for(int j = 0; j < c.n; j++) {
+		for(int i = 0, col = c.firstColumn; col < c.lastColumn; col++, i++) {
+			if(ptr[i]->idx == j) {
+				os << ptr[i]->x << " ";
+				ptr[i]++;
+			}
+			else os << 0 << " ";
+		}
+		os << "\n";
+	}
+
+	return os;
 }

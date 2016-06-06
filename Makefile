@@ -15,7 +15,7 @@ matrixmul: densematgen.o matrixmul.o
 #$(ALL): %: %.o $(MATGENFILE)
 #	$(CC) $(LDFLAGS) $^ -o $@
 
-matrixmul.o: matrixmul.cpp
+matrixmul.o: matrixmul.cpp matrixmul.h
 	$(CPP) $(CPPFLAGS) -o $@ $<
 
 densematgen.o: densematgen.c densematgen.h
