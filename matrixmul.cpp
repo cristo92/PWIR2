@@ -15,6 +15,8 @@
 
 using namespace std;
 
+#define FOR(i, row, M) for(int i = 0, row = M.first; row < M.last; i++, row++)
+
 int main(int argc, char * argv[])
 {
 	cout << setprecision(5) << fixed;
@@ -87,7 +89,7 @@ int main(int argc, char * argv[])
 	InitMessage my_init_msg;
 	PartA A;
 	PartB B;
-	PartC C;
+	PartA C;
 	InitMessage init_msgs[s][c];
 	//read
 	if(mpi_rank == 0) {
@@ -236,8 +238,8 @@ int main(int argc, char * argv[])
 	// DEBUG END
 
 	// CREATE MATRIX C
-	C = PartC(B.first, B.last, n);
-	C.columns.resize(C.lastColumn - C.firstColumn);
+	C = PartA(B.first, B.last);
+	C.vecs.resize(C.last - C.first);
 
 	MPI_Barrier(MPI_COMM_WORLD);
 	comm_end = MPI_Wtime();
@@ -245,62 +247,127 @@ int main(int argc, char * argv[])
 	// ***************************************
 	// ************* COMPUTATION *************
 	// ***************************************
+	int bytes = ((n + s - 1) / s) * ((n + s - 1) / s) * q * sizeof(Point) + (2 + ((n + s - 1) / s)) * sizeof(int);
+	char *sendbuf, *recvbuf;
+	int *recvcount, *displs;
+	sendbuf = (char*)malloc(bytes);
+	recvbuf = (char*)malloc(bytes * c);
+	recvcount = (int*)malloc(c * sizeof(int));
+	displs = (int*)malloc(c * sizeof(int));
+	for(int i = 0; i < c; i++) {
+		recvcount[i] = bytes;
+		displs[i] = i * bytes;
+	}
+
+	MPI_Comm group_comm;
+	MPI_Comm_split(MPI_COMM_WORLD, my_init_msg.cx, my_init_msg.cy, &group_comm);
+	if(mpi_rank == DEBUG_RANK) {
+		int t;
+		MPI_Comm_size(group_comm, &t);
+		cerr << "Comm size: " << t << "\n";
+	} 
+
 	comp_start = MPI_Wtime();
-	
-	if(mpi_rank >= s * c) goto exit;
 
-	while(q--) {
-		if(mpi_rank == DEBUG_RANK) cerr << "STEP " << q << "\n";
-		int idx = my_init_msg.cx;
-		int idy = my_init_msg.cy;
+	while(exponent--) {
+		for(int t = q - 1; t >= 0; t--) {
+			if(mpi_rank == DEBUG_RANK) cerr << "STEP " << q - t << "\n";
+			int idx = my_init_msg.cx;
+			int idy = my_init_msg.cy;
 
-		// TODO - don't send and receive last message
-		int bytes = partAToMessage(A, send_msg);
-		if(q)
-			MPI_Isend(
-				send_msg,
-				bytes,
-				MPI_BYTE,
-				c * ((idx + s - 1) % s) + idy,
-				MPI_SEND_A,
-				MPI_COMM_WORLD,
-				&send_request
-			);
+			// TODO - don't send and receive last message
+			int bytes = partAToMessage(A, send_msg);
+			if(t)
+				MPI_Isend(
+					send_msg,
+					bytes,
+					MPI_BYTE,
+					c * ((idx + s - 1) % s) + idy,
+					MPI_SEND_A,
+					MPI_COMM_WORLD,
+					&send_request
+				);
+			else
+				MPI_Isend(
+					send_msg,
+					bytes,
+					MPI_BYTE,
+					c * ((idx + q - 1) % s) + idy,
+					MPI_SEND_A,
+					MPI_COMM_WORLD,
+					&send_request
+				);
 
-		if(mpi_rank == DEBUG_RANK)
-			cerr << A;
+			if(mpi_rank == DEBUG_RANK)
+				cerr << A;
 
-		for(int i = 0, row = A.first; row < A.last; row++, i++) {
-			for(int j = 0, col = B.first; col < B.last; col++, j++) {
-				double el = 0;
-				for(auto it = A.vecs[i].begin(); it != A.vecs[i].end(); it++) {
-					el += it->x * B.columns[j][it->idx];
+			FOR(i, row, A) {
+				FOR(j, col, B) {
+					double el = 0;
+					for(auto it = A.vecs[i].begin(); it != A.vecs[i].end(); it++) {
+						el += it->x * B.columns[j][it->idx];
+					}
+					C.vecs[j].push_back(Point(row, el));
 				}
-				C.columns[j].push_back(Point(row, el));
+			}
+
+			if(t)
+				MPI_Irecv(
+					recv_msg,
+					max_bytes,
+					MPI_BYTE,
+					c * ((idx + 1) % s) + idy,
+					MPI_SEND_A,
+					MPI_COMM_WORLD,
+					&recv_request
+				);
+			else
+				MPI_Irecv(
+					recv_msg,
+					max_bytes,
+					MPI_BYTE,
+					c *((idx - q + 1 + s) % s) + idy,
+					MPI_SEND_A,
+					MPI_COMM_WORLD,
+					&recv_request
+				);
+
+			
+			MPI_Wait(&send_request, &send_status);
+			MPI_Wait(&recv_request, &recv_status);
+			
+
+			A = messageToPartA(recv_msg);
+		}
+
+		if(!exponent) break;
+
+		// Broadcast C
+		int sendcount = partAToMessage(C, sendbuf);
+		MPI_Allgatherv(sendbuf, sendcount, MPI_BYTE, recvbuf, recvcount, displs,
+			MPI_BYTE, group_comm);
+
+		for(int i = 0; i < c; i++) {
+			PartA tempC = messageToPartA(recvbuf + displs[i]);
+			FOR(j, row, tempC) {
+				for(auto &p: tempC.vecs[j]) {
+					if(mpi_rank == DEBUG_RANK) cerr << p << "\n";
+					B.columns[j][p.idx] = p.x;
+				}
 			}
 		}
 
-		if(q)
-			MPI_Irecv(
-				recv_msg,
-				max_bytes,
-				MPI_BYTE,
-				c * ((idx + 1) % s) + idy,
-				MPI_SEND_A,
-				MPI_COMM_WORLD,
-				&recv_request
-			);
+		if(mpi_rank == DEBUG_RANK) cerr << B;
 
-		if(q) {
-			MPI_Wait(&send_request, &send_status);
-			MPI_Wait(&recv_request, &recv_status);
-		}
-
-		A = messageToPartA(recv_msg);
+		C = PartA(C.first, C.last);
+		C.vecs.resize(C.last - C.first);
 	}
 
+	if(mpi_rank == DEBUG_RANK)
+				cerr << A;
+
 	// Sort partC
-	for(auto &col : C.columns) {
+	/*for(auto &col : C.vecs) {
 		if(col.size() == 1) continue;
 		auto ptr = col.begin();
 		for(; next(ptr) != col.end(); ptr++)
@@ -315,17 +382,22 @@ int main(int argc, char * argv[])
 		}
 
 		col.splice(col.begin(), col, ptr, col.end());
-	}
+	}*/
 
-exit:
 	MPI_Barrier(MPI_COMM_WORLD);
 	comp_end = MPI_Wtime();
+
+	free(sendbuf);
+	free(recvbuf);
+	free(recvcount);
+	free(displs);
+	MPI_Comm_free(&group_comm);
 
 	free(recv_msg);
 	free(send_msg);
 
 	// DEBUG BEGIN
-	if(mpi_rank == DEBUG_RANK) cerr << C;
+	if(mpi_rank == DEBUG_RANK) cerr << "PartC\n" << C;
 	// DEBUG END
 	
 	if (show_results) 
@@ -346,11 +418,11 @@ exit:
 				displs[i] = i * bytes;
 			}
 
-			partCToMessage(C, recvbuf);
+			partAToMessage(C, recvbuf);
 		}
 		else {
 			sendbuf = (char*)malloc(bytes);
-			sendcount = partCToMessage(C, sendbuf);
+			sendcount = partAToMessage(C, sendbuf);
 		}
 
 		MPI_Gatherv(sendbuf, sendcount, MPI_BYTE, recvbuf, recvcount,
@@ -361,7 +433,7 @@ exit:
 				buf = recvbuf + i * bytes;
 				PartA tempA = messageToPartA(buf);
 
-				for(int i = 0, row = tempA.first; row < tempA.last; row++, i++) {
+				FOR(i, row, tempA) {
 					for(auto &p : tempA.vecs[i]) {
 						bigC[p.idx][row] = p.x;
 					}
@@ -396,9 +468,8 @@ int analysePartA(const PartA &partA) {
 	int size = sizeof(int) * (2 + partA.last - partA.first);
 	int count = 0;
 
-	for(int i = partA.first; i < partA.last; i++) {
-		int idx = i - partA.first;
-		count += partA.vecs[idx].size();
+	FOR(i, row, partA) {
+		count += partA.vecs[i].size();
 	}
 
 	size += count * sizeof(Point);
@@ -428,14 +499,14 @@ int partAToMessage(const PartA &partA, char *out) {
 	return size;
 }
 
-int partCToMessage(const PartC &c, char *out) {
+/*int partCToMessage(const PartC &c, char *out) {
 	PartA a(c.firstColumn, c.lastColumn);
 	a.vecs = vector<vector<Point>>(c.columns.size());
 	for(unsigned int i = 0; i < c.columns.size(); i++)
 		a.vecs[i] = vector<Point> { c.columns[i].begin(), c.columns[i].end() };
 
 	return partAToMessage(a, out);
-}
+}*/
 
 PartA messageToPartA(char *out) {
 	PartA partA;
@@ -488,7 +559,7 @@ ostream& operator<<(ostream& os, const PartB &b) {
 	return os;
 }
 
-ostream& operator<<(ostream& os, const PartC &c) {
+/*ostream& operator<<(ostream& os, const PartC &c) {
 	os << "==== PartC ====\n";
 	os << c.firstColumn << " " << c.lastColumn << "\n";
 	vector< decltype(c.columns[0].begin()) > ptr;
@@ -506,4 +577,4 @@ ostream& operator<<(ostream& os, const PartC &c) {
 	}
 
 	return os;
-}
+}*/

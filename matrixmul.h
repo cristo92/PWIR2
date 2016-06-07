@@ -8,7 +8,7 @@ using namespace std;
 #define MPI_INIT_A_TAG 	1002
 #define MPI_SEND_A 		1003
 
-#define DEBUG_RANK 43
+#define DEBUG_RANK 7
 
 struct InitMessage {
 	int cx, cy, c;
@@ -46,24 +46,24 @@ struct PartB {
 	PartB(int first, int last): first(first), last(last) {}
 	PartB() {}
 };
-
+/*
 struct PartC {
 	int firstColumn, lastColumn, n;
 	vector<list<Point>> columns;
 
 	PartC(int firstColumn, int lastColumn, int n): firstColumn(firstColumn), lastColumn(lastColumn), n(n) {}
 	PartC() {}
-};
+};*/
 
 int analysePartA(const PartA &partA);
 int partAToMessage(const PartA &partA, char *out);
-int partCToMessage(const PartC &partC, char *out);
+// int partCToMessage(const PartC &partC, char *out);
 PartA messageToPartA(char *out);
 
 ostream& operator<<(ostream &os, const Point &p);
 ostream& operator<<(ostream& os, const PartA &a);
 ostream& operator<<(ostream& os, const PartB &b);
-ostream& operator<<(ostream& os, const PartC &c);
+// ostream& operator<<(ostream& os, const PartC &c);
 
 #endif
 
