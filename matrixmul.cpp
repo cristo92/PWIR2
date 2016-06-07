@@ -3,6 +3,7 @@
 #include <mpi.h>
 #include <assert.h>
 #include <getopt.h>
+#include <string.h>
 #include <algorithm>
 #include <vector>
 #include <list>
@@ -430,7 +431,7 @@ int partAToMessage(const PartA &partA, char *out) {
 int partCToMessage(const PartC &c, char *out) {
 	PartA a(c.firstColumn, c.lastColumn);
 	a.vecs = vector<vector<Point>>(c.columns.size());
-	for(int i = 0; i < c.columns.size(); i++)
+	for(unsigned int i = 0; i < c.columns.size(); i++)
 		a.vecs[i] = vector<Point> { c.columns[i].begin(), c.columns[i].end() };
 
 	return partAToMessage(a, out);
@@ -477,7 +478,7 @@ ostream& operator<<(ostream& os, const PartA &a) {
 ostream& operator<<(ostream& os, const PartB &b) {
 	os << "==== PartB ====\n";
 	os << b.first << " " << b.last << "\n";
-	for(int j = 0; j < b.columns[0].size(); j++) {
+	for(unsigned int j = 0; j < b.columns[0].size(); j++) {
 		for(int i = 0, col = b.first; col < b.last; col++, i++) {
 			os << b.columns[i][j] << " ";
 		}
