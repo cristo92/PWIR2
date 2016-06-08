@@ -496,20 +496,6 @@ int main(int argc, char * argv[])
 	return 0;
 }
 
-/*void collectA(const InitMessage &msg, PartA &A, int p) {
-	char *sendbuf, *recvbuf;
-	int *recvcount, *displs;
-	int sendcount;
-
-	sendcount = analysePartA(A);
-	sendbuf = (char*)malloc(sendcount);
-
-	free(sendbuf);
-	free(recvbuf);
-	free(recvcount);
-	free(displs);
-}*/
-
 int analysePartA(const PartA &partA) {
 	int size = sizeof(int) * (2 + partA.last - partA.first);
 	int count = 0;
