@@ -488,8 +488,16 @@ int main(int argc, char * argv[])
 	}
 	if (count_ge)
 	{
-		// FIXME: replace the following line: count ge elements
-		printf("54\n");
+		int ile = 0, sum;
+		FOR(i, col, C) {
+			for(auto &p: C.vecs[i])
+				if(p.x >= ge_element)
+					ile++;
+		}
+
+		MPI_Reduce(&ile, &sum, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+
+		if(mpi_rank == 0) cout << sum << "\n";
 	}
 
 	MPI_Finalize();
