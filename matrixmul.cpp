@@ -93,7 +93,7 @@ int main(int argc, char * argv[])
 
 	int bytes;
 	char *sendbuf, *recvbuf;
-	int *sendcount, *displs, *recvcount;
+	int *sendcount, *sendcount_tmp, *displs, *displs_tmp, *recvcount;
 
 	int m, n, nnz, max_nnz;
 
@@ -214,26 +214,34 @@ int main(int argc, char * argv[])
 	nnz = my_init_msg.nnz;
 	bytes = nnz * sizeof(Point) + s * n * sizeof(int) + s * 2 * sizeof(int);
 	if(mpi_rank == 0) {
-		sendbuf = (char*)malloc(c * bytes);
+		sendbuf = (char*)malloc(bytes);
 		sendcount = (int*)malloc(p * sizeof(int));
+		sendcount_tmp = (int*)malloc(p * sizeof(int));
 		displs = (int*)malloc((p + 1) * sizeof(int));
+		displs_tmp = (int*)malloc((p + 1) * sizeof(int));
 	}
 	recvbuf = (char*)malloc(bytes);
 
 	if(mpi_rank == 0) {
-		displs[0] = 0;
-		for(int i = 0; i < p; i++) {
-			int idx = (i/c) % s;
-			int idy = i % c;
+		displs_tmp[0] = 0;
+		for(int i = 0; i < s; i++) {
+			int bytes = analysePartA(partA[i]);
 
-			int partAIdx = (idx + ids[idy]) % s;
-			int bytes = analysePartA(partA[partAIdx]);
-
-			messages = sendbuf + displs[i];
-			partAToMessage(partA[partAIdx], messages);
-			sendcount[i] = bytes;
-			displs[i + 1] = displs[i] + bytes;
+			messages = sendbuf + displs_tmp[i];
+			partAToMessage(partA[i], messages);
+			sendcount_tmp[i] = bytes;
+			displs_tmp[i + 1] = displs_tmp[i] + bytes;
 		}
+	}
+
+	for(int i = 0; i < p; i++) {
+		int idx = i / c;
+		int idy = i % c;
+
+		int partAIdx = (idx + ids[idy]) % s;
+		if(mpi_rank == DEBUG_RANK) cerr << partAIdx << "\n";
+		displs[i] = displs_tmp[partAIdx];
+		sendcount[i] = sendcount_tmp[partAIdx];
 	}
 
 	if(mpi_rank == DEBUG_RANK) cerr << "I'm about to scatter\n";

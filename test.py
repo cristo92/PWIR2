@@ -20,7 +20,7 @@ def intToStr(x, num):
 for e in range(1, 4):
 	for i in xrange(2):
 		for j in xrange(10):
-			command = "mpirun -np {} ./matrixmul -f ../exported_tests/sparse05_{}_{} -s {} -c {} -e {} -v > out 2> /dev/null".format(
+			command = "mpirun -np {} ./matrixmul -f ../exported_tests/sparse05_{}_{} -s {} -c {} -e {} -v -i > out 2> /dev/null".format(
 					NP[i], intToStr(SIZE[i], 5), intToStr(BTYPE[j], 3), SEED[j], C[i], e)
 			if(len(sys.argv) == 1):
 				os.system(command)
