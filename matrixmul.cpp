@@ -92,8 +92,8 @@ int main(int argc, char * argv[])
 	vector<vector<Point>> inputA;
 
 	int bytes;
-	char *sendbuf, *recvbuf;
-	int *sendcount, *displs, *recvcount;
+	char *sendbuf = NULL, *recvbuf = NULL;
+	int *sendcount = NULL, *displs = NULL, *recvcount = NULL;
 
 	int m, n, nnz, max_nnz;
 
