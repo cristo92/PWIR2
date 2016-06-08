@@ -232,16 +232,16 @@ int main(int argc, char * argv[])
 			sendcount_tmp[i] = bytes;
 			displs_tmp[i + 1] = displs_tmp[i] + bytes;
 		}
-	}
 
-	for(int i = 0; i < p; i++) {
-		int idx = i / c;
-		int idy = i % c;
+		for(int i = 0; i < p; i++) {
+			int idx = i / c;
+			int idy = i % c;
 
-		int partAIdx = (idx + ids[idy]) % s;
-		if(mpi_rank == DEBUG_RANK) cerr << partAIdx << "\n";
-		displs[i] = displs_tmp[partAIdx];
-		sendcount[i] = sendcount_tmp[partAIdx];
+			int partAIdx = (idx + ids[idy]) % s;
+			if(mpi_rank == DEBUG_RANK) cerr << partAIdx << "\n";
+			displs[i] = displs_tmp[partAIdx];
+			sendcount[i] = sendcount_tmp[partAIdx];
+		}
 	}
 
 	if(mpi_rank == DEBUG_RANK) cerr << "I'm about to scatter\n";
