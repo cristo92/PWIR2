@@ -120,7 +120,7 @@ int main(int argc, char * argv[])
 
 	comm_start =  MPI_Wtime();
 
-	vector<PartA> partA(s);
+	vector<PartA> partA(p);
 	int *ids = (int*)malloc(c * sizeof(int));
 	memset(ids, 0, c * sizeof(int));
 
@@ -150,6 +150,10 @@ int main(int argc, char * argv[])
 					init_msgs[idp].nnz = nnz;
 					init_msgs[idp].max_nnz = max_nnz;
 				}
+			}
+
+			length = (n + p - 1) / p;
+			for(int i = 0, row = 0; i < p; i++, row = min(row + length, n)) {
 				partA[i].first = row;
 				partA[i].last = min(row + length, n);
 				partA[i].vecs.resize(partA[i].last - partA[i].first);
@@ -178,13 +182,13 @@ int main(int argc, char * argv[])
 				init_msgs[i].lastAColumn = min(n,((i / c) + 1) * stepA);
 			}
 
-			for(int i = 0; i < s; i++) {
+			for(int i = 0; i < p; i++) {
 				partA[i].first = 0;
 				partA[i].last = n;
 				partA[i].vecs.resize(n);
 			}
 
-			for(int i = 0, step = (n + s - 1) / s; i < n; i++) {
+			for(int i = 0, step = (n + p - 1) / p; i < n; i++) {
 				int j = 0;
 				for(auto &p: inputA[i]) {
 					while(p.idx >= (j + 1) * step) j++;
@@ -212,12 +216,12 @@ int main(int argc, char * argv[])
 
 	n = my_init_msg.n;
 	nnz = my_init_msg.nnz;
-	bytes = nnz * sizeof(Point) + s * n * sizeof(int) + s * 2 * sizeof(int);
+	bytes = nnz * sizeof(Point) + p * n * sizeof(int) + p * 2 * sizeof(int);
 	if(mpi_rank == 0) {
-		sendbuf = (char*)malloc(c * bytes);
-		sendcount = (int*)malloc(p * sizeof(int));
-		displs = (int*)malloc((p + 1) * sizeof(int));
+		sendbuf = (char*)malloc(bytes);
 	}
+	sendcount = (int*)malloc(p * sizeof(int));
+	displs = (int*)malloc((p + 1) * sizeof(int));
 	recvbuf = (char*)malloc(bytes);
 
 	if(mpi_rank == 0) {
@@ -241,18 +245,49 @@ int main(int argc, char * argv[])
 	MPI_Scatterv(sendbuf, sendcount, displs, MPI_BYTE, recvbuf, bytes,
 		MPI_BYTE, 0, MPI_COMM_WORLD);
 
+	if(mpi_rank == 0) {
+		free(sendbuf);
+	}
+
 	if(mpi_rank == DEBUG_RANK) cerr << "I'm about to convert message to A\n";
-	if(mpi_rank > 0) A = messageToPartA(recvbuf);
+	if(mpi_rank >= 0) {
+		PartA tempA = messageToPartA(recvbuf);
+		bytes = ((n + p - 1) / p) * n * sizeof(Point) + n * sizeof(int) + 2 * sizeof(int);
+		sendbuf = (char*)malloc(bytes * c);
+		displs[0] = 0;
+		for(int i = 0; i < c; i++) {
+			sendcount[i] = bytes;
+			displs[i + 1] = displs[i] + bytes;
+		}
+		MPI_Allgatherv(recvbuf, analysePartA(tempA), MPI_BYTE, sendbuf, 
+			sendcount, displs, MPI_BYTE, group_comm);
+		A = messageToPartA(recvbuf);
+		if(mpi_rank == DEBUG_RANK) cerr << A;
+		if(use_inner) {
+			for(int i = 1; i < c; i++) {
+				tempA = messageToPartA(recvbuf + displs[i]);
+				assert(A.last == tempA.first);
+				FOR(i, row, tempA) A.vecs.push_back(tempA.vecs[i]);
+			}
+		}
+		else {
+			for(int i = 1; i < c; i++) {
+				tempA = messageToPartA(recvbuf + displs[i]);
+				for(int j = 0; j < n; j++) {
+					assert(A.vecs[j].back().idx < tempA.vecs[j].front().idx);
+					A.vecs[j].insert(A.vecs[j].end(), tempA.vecs[j].begin(), tempA.vecs[j].end());
+				}
+			}
+		}
+	}
 	if(mpi_rank == DEBUG_RANK) {
 		cerr << "I'm " << mpi_rank << "(" << my_init_msg.cx << ", " << my_init_msg.cy  << "), and got:\n";
 		cerr << A; 
 	}
 
-	if(mpi_rank == 0) {
-		free(sendbuf);
-		free(sendcount);
-		free(displs);
-	}
+	free(sendbuf);
+	free(sendcount);
+	free(displs);	
 	free(recvbuf);
 	free(ids);
 	
