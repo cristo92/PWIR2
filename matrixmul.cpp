@@ -140,7 +140,7 @@ int main(int argc, char * argv[])
 					int idy = j;
 					int idp = idx * c + idy;
 
-					init_msgs[idp].firstBColumn = length * idx;
+					init_msgs[idp].firstBColumn = min(length * idx, n);
 					init_msgs[idp].lastBColumn = min(length * (idx + 1), n);
 
 					init_msgs[idp].cx = idx;
@@ -244,7 +244,6 @@ int main(int argc, char * argv[])
 		}
 	}
 
-	if(mpi_rank == DEBUG_RANK) cerr << "I'm about to scatter\n";
 
 	MPI_Scatterv(sendbuf, sendcount, displs, MPI_BYTE, recvbuf, bytes,
 		MPI_BYTE, 0, MPI_COMM_WORLD);
@@ -253,13 +252,15 @@ int main(int argc, char * argv[])
 	if(mpi_rank > 0) A = messageToPartA(recvbuf);
 	if(mpi_rank == DEBUG_RANK) {
 		cerr << "I'm " << mpi_rank << "(" << my_init_msg.cx << ", " << my_init_msg.cy  << "), and got:\n";
-		cerr << A; 
+		cerr << "==== Part A ====\n" << A; 
 	}
 
 	if(mpi_rank == 0) {
 		free(sendbuf);
 		free(sendcount);
+		free(sendcount_tmp);
 		free(displs);
+		free(displs_tmp);
 	}
 	free(recvbuf);
 	free(ids);
@@ -276,7 +277,7 @@ int main(int argc, char * argv[])
 	}
 
 	// DEBUG BEGIN
-	if(mpi_rank == DEBUG_RANK) cerr << B;
+	if(mpi_rank == DEBUG_RANK) cerr << "==== Part B ====\n" << B;
 	// DEBUG END
 
 	// CREATE MATRIX C
@@ -289,7 +290,7 @@ int main(int argc, char * argv[])
 		}
 	}
 
-	if(mpi_rank == DEBUG_RANK) cerr << C;
+	if(mpi_rank == DEBUG_RANK) cerr << "==== Part C ====\n" << C;
 
 	MPI_Barrier(MPI_COMM_WORLD);
 	comm_end = MPI_Wtime();
@@ -339,8 +340,9 @@ int main(int argc, char * argv[])
 				next_rank = (mpi_rank + c) % p;
 			}
 
-			// TODO - don't send and receive last message
-			int bytes = partAToMessage(A, send_msg);
+		
+			int bytes;
+			bytes = partAToMessage(A, send_msg);
 			MPI_Isend(
 				send_msg,
 				bytes,
@@ -352,7 +354,7 @@ int main(int argc, char * argv[])
 			);
 
 			if(mpi_rank == DEBUG_RANK)
-				cerr << A;
+				cerr << "==== Part A ====\n" << A;
 
 			FOR(i, row, A) {
 				FOR(j, col, B) {
@@ -378,7 +380,6 @@ int main(int argc, char * argv[])
 			
 			MPI_Wait(&send_request, &send_status);
 			MPI_Wait(&recv_request, &recv_status);
-			
 
 			A = messageToPartA(recv_msg);
 		}
@@ -400,7 +401,7 @@ int main(int argc, char * argv[])
 				}
 			}
 
-			if(mpi_rank == DEBUG_RANK) cerr << B;
+			if(mpi_rank == DEBUG_RANK) cerr << "==== Part B ====\n" << B;
 
 			C = PartA(C.first, C.last);
 			C.vecs.resize(C.last - C.first);
@@ -419,7 +420,7 @@ int main(int argc, char * argv[])
 	}
 
 	if(mpi_rank == DEBUG_RANK)
-				cerr << A;
+				cerr << "==== Part A ====\n" << A;
 
 	MPI_Barrier(MPI_COMM_WORLD);
 	comp_end = MPI_Wtime();
@@ -436,7 +437,7 @@ int main(int argc, char * argv[])
 	free(send_msg);
 
 	// DEBUG BEGIN
-	if(mpi_rank == DEBUG_RANK) cerr << "PartC\n" << C;
+	if(mpi_rank == DEBUG_RANK) cerr << "==== PartC ====\n" << C;
 	// DEBUG END
 	
 	if (show_results) 
@@ -573,7 +574,6 @@ ostream& operator<<(ostream &os, const Point &p) {
 }
 
 ostream& operator<<(ostream& os, const PartA &a) {
-	os << "==== PartA ====\n";
 	os << a.first << " " << a.last << endl;
 	for(int i = a.first; i < a.last; i++) {
 		int idx = i - a.first;
@@ -586,7 +586,6 @@ ostream& operator<<(ostream& os, const PartA &a) {
 }
 
 ostream& operator<<(ostream& os, const PartB &b) {
-	os << "==== PartB ====\n";
 	os << b.first << " " << b.last << "\n";
 	if(b.last == b.first) return os;
 	for(unsigned int j = 0; j < b.columns[0].size(); j++) {

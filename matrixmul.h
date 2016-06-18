@@ -8,7 +8,7 @@ using namespace std;
 #define MPI_INIT_A_TAG 	1002
 #define MPI_SEND_A 		1003
 
-#define DEBUG_RANK 7
+#define DEBUG_RANK -1
 
 struct InitMessage {
 	int cx, cy, c;
